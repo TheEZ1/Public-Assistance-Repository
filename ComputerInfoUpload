@@ -1,0 +1,90 @@
+$LiveAdapters = @()
+$AutomaticVariables = Get-Variable
+
+
+<#
+.SYNOPSIS
+# This script is to gather necessary details of a machine and export them to a csv file that a python script then picks up
+#>
+# The below line is a function that grabs a list of variables and compares them to the "Automatic Variables" that the first line catches.  This is to dynamically create variables later.
+function get-scriptvariables {
+    Compare-Object (Get-Variable) $AutomaticVariables -Property Name -PassThru | Where -Property Name -ne "AutomaticVariables" 
+}
+
+function get-activenics {
+    $Adapterinfo = get-netadapter -Physical
+    $IPInfo = Get-NetIPAddress -AddressFamily IPv4
+
+    foreach ($IP in $IPinfo) {
+        if ($Adapterinfo.interfaceindex -contains $IP.ifIndex) {
+        
+        
+            $adapterobject = New-Object -TypeName psobject
+            $adapterobject | Add-Member -membertype NoteProperty -Name "IfIndex" -Value $IP.ifIndex
+            $adapterobject | Add-Member -Membertype NoteProperty -Name "IPAddress" -Value $IP.IPv4Address
+            $adapterobject | Add-Member -Membertype NoteProperty -Name "IfName" -Value $IP.Interfacealias
+            $adapterobject | Add-Member -Membertype NoteProperty -Name "MACAddress" -Value (get-netadapter -InterfaceIndex $IP.ifIndex | select -ExpandProperty MacAddress)
+
+
+            
+           $global:LiveAdapters += $adapterobject
+            
+        }
+        else {
+            continue
+        }
+        }
+    }
+
+
+function get-adapterstats {
+foreach ($object in $LiveAdapters) {
+    $Networkinfo.add($object.ifname,@($object.IPAddress,$object.MACAddress))
+    }
+}
+
+
+$Computerinfo = Get-ComputerInfo
+
+
+### This is mandatory information regarding the machine.
+$Computername = $Computerinfo.CsName
+$Manufacturer = $Computerinfo.CsManufacturer
+$Model = $Computerinfo.CsModel
+$OSVersion = $Computerinfo.WindowsProductName
+$InstallationType = $Computerinfo.WindowsInstallationType
+
+If ($InstallationType -eq 'Client') {
+    $InstallationType = 'Workstation'
+}
+
+
+### This is additional information regarding the machine
+$OSInstallDate = $Computerinfo.WindowsInstallDataFromRegistry
+$Phy_proc_count = $Computerinfo.CsNumberofProcessors
+$Logical_proc_count = $Computerinfo.CsNumberofLogicalProcessors
+
+### This is networking information for the machine
+### The below grabs an array of the "Physical" nics of the device as well as its ip, name, and interface index and stores it in the $LiveAdapters variable
+get-activenics
+
+### This is to create an array to compare and see what the additional variables are to be created
+$Variablelist = get-scriptvariables
+
+
+
+### PSobject for output to csv
+$Config_object = new-object -TypeName psobject
+
+Foreach ($i in $Variablelist) {
+$Config_object | Add-Member -MemberType NoteProperty -Name $i.Name -Value $i.Value
+Remove-Variable -Name $i.Name -Force -Verbose
+}
+
+$Networkinfo = @{}
+get-adapterstats
+
+
+$Config_object | Add-Member -MemberType NoteProperty -Name 'Networking' -Value $Networkinfo
+
+$Config_object | ConvertTo-Json | out-file $env:temp\computerinfo.json -Force
